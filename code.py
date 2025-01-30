@@ -73,7 +73,7 @@ def time_left(target_iso):
     time_diff = target_time - current_time
 
     if time_diff.total_seconds() <= 0:
-        return 0
+        return 0, 0
 
     hours, remainder = divmod(time_diff.seconds, 3600)
     minutes, _ = divmod(remainder, 60)

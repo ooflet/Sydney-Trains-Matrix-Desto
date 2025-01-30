@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 API_KEY = ""
 STOP_ID = "" # Its recommended you fill stop ID out in advance to make refreshes faster
 STATION = "" # Fill this with your station if you do not know your stop ID
-PLATFORM = "4" # What platform do you want the display to show?
+PLATFORM = "" # What platform do you want the display to show?
 
 TIME_MS = 0 # How much delay to perform on each tick
 TIME_RE = 50 # How many ticks until the time refreshes

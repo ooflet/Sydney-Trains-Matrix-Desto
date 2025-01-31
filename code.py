@@ -1,5 +1,7 @@
+import sys
 import time
 import requests
+import traceback
 
 import framebufferio
 import terminalio
@@ -65,8 +67,8 @@ matrix = rgbmatrix.RGBMatrix(
 
 display = framebufferio.FramebufferDisplay(matrix, auto_refresh=False)
 
-def draw_splash(version=None):
-    if version == None:
+def draw_splash(message=None):
+    if message == None:
         icon = displayio.TileGrid(icons["T"], pixel_shader=icons["T"].pixel_shader)
         icon.x = 28
         icon.y = 12
@@ -76,7 +78,7 @@ def draw_splash(version=None):
         text = adafruit_display_text.label.Label(
             small_font,
             color=0xffffff,
-            text = version,
+            text = message,
             anchor_point = (0.5, 0.5),
             anchored_position = (32.0, 16.0)
         )
@@ -85,6 +87,13 @@ def draw_splash(version=None):
     
     display.root_group = group
     display.refresh(minimum_frames_per_second=0)
+
+def onException(exc_type, exc_value, exc_traceback):
+    draw_splash("!?")
+    exception = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    print(exception)
+
+sys.excepthook = onException
 
 def time_left(target_iso):
     target_time = datetime.fromisoformat(target_iso.replace("Z", "+00:00"))
@@ -130,9 +139,11 @@ def get_stop_id(station):
             return id
         else:
             print("Failed to obtain STOP_ID")
+            draw_splash(f"! STOP_ID !")
             return None
     else:
         print(f"Response returned {response.status_code}")
+        draw_splash(f"! {response.status_code} !")
         return None
 
 
@@ -162,19 +173,23 @@ def update_departures(id, platform):
 
     response = requests.get(url, headers=headers, params=params)
     json = response.json()
-    if json["locations"] != []:
-        events = []
-        for event in json["stopEvents"]:
-            name = event["location"]["parent"]["disassembledName"].split(", ")
-            station_platform = name[1].replace("Platform ", "")
-            if station_platform == platform:
-                events.append(event)
-
-        if events != []:
-            global current_event
-            current_event = events[0]
-        else:
-            print("no events found")
+    if response.status_code == 200:
+        if json.get("locations", []) != []:
+            events = []
+            for event in json["stopEvents"]:
+                name = event["location"]["parent"]["disassembledName"].split(", ")
+                station_platform = name[1].replace("Platform ", "")
+                if station_platform == platform:
+                    events.append(event)
+    
+            if events != []:
+                global current_event
+                current_event = events[0]
+            else:
+                print("no events found")
+    else:
+        print(f"Response returned {response.status_code}")
+        draw_splash(f"! {response.status_code} !")
 
 def get_stops(origin_id, stop_id, line):
     url = "https://api.transport.nsw.gov.au/v1/tp/trip"

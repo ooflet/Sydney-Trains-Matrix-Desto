@@ -1,4 +1,3 @@
-
 import time
 import requests
 
@@ -12,7 +11,9 @@ import adafruit_display_text.label
 from adafruit_bitmap_font import bitmap_font
 
 from pprint import pprint
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+VERSION = "v1.0"
 
 # Replace with your TfNSW OpenData API key
 API_KEY = ""
@@ -20,9 +21,15 @@ STOP_ID = "" # Its recommended you fill stop ID out in advance to make refreshes
 STATION = "" # Fill this with your station if you do not know your stop ID
 PLATFORM = "" # What platform do you want the display to show?
 
-TIME_MS = 0 # How much delay to perform on each tick
+TIME_MS = 0.1 # How much delay to perform on each tick
 TIME_RE = 50 # How many ticks until the time refreshes
 DATA_RE = 200 # How many ticks until the data refreshes
+
+# tzdata module not available, so offsets are hardcoded
+# (not good!!!)
+TIME_ZN = 10 # How many hours to add onto UTC time
+TIME_DT = 11 # How many hours to add when using daylight savings
+USES_DT = True # Use daylight savings time
 
 # Icons
 
@@ -58,12 +65,24 @@ matrix = rgbmatrix.RGBMatrix(
 
 display = framebufferio.FramebufferDisplay(matrix, auto_refresh=False)
 
-def draw_splash():
-    icon = displayio.TileGrid(icons["T"], pixel_shader=icons["T"].pixel_shader)
-    icon.x = 28
-    icon.y = 11
-    group = displayio.Group()
-    group.append(icon)
+def draw_splash(version=None):
+    if version == None:
+        icon = displayio.TileGrid(icons["T"], pixel_shader=icons["T"].pixel_shader)
+        icon.x = 28
+        icon.y = 12
+        group = displayio.Group()
+        group.append(icon)
+    else:
+        text = adafruit_display_text.label.Label(
+            small_font,
+            color=0xffffff,
+            text = version,
+            anchor_point = (0.5, 0.5),
+            anchored_position = (32.0, 16.0)
+        )
+        group = displayio.Group()
+        group.append(text)
+    
     display.root_group = group
     display.refresh(minimum_frames_per_second=0)
 
@@ -78,7 +97,15 @@ def time_left(target_iso):
     hours, remainder = divmod(time_diff.seconds, 3600)
     minutes, _ = divmod(remainder, 60)
     
-    return hours, minutes + 1
+    return hours, minutes
+
+def get_time():
+    if USES_DT:
+        now = datetime.now() + timedelta(hours=TIME_DT)
+    else:
+        now = datetime.now() + timedelta(hours=TIME_ZN)
+        
+    return now.strftime("%H:%M")
 
 # Get global station ID from string if stop_id not provided
 
@@ -149,7 +176,7 @@ def update_departures(id, platform):
         else:
             print("no events found")
 
-def get_stops(origin_id, stop_id):
+def get_stops(origin_id, stop_id, line):
     url = "https://api.transport.nsw.gov.au/v1/tp/trip"
 
     print(origin_id, stop_id)
@@ -181,9 +208,20 @@ def get_stops(origin_id, stop_id):
         data = response.json()
         # Extract and print the list of stops
         stops = []
-        for leg in data.get('journeys', [])[0].get('legs', []):
-            for stop in leg.get('stopSequence', []):
-                stops.append(stop.get("name").split(",")[0].replace("Station", ""))
+        best_fit_journey = None
+        if data.get("journeys"):
+            for journey in data.get('journeys', []):
+                print(journey["legs"][0]["transportation"].get("disassembledName"))
+                if journey.get("interchanges") == 0 and journey["legs"][0]["transportation"].get("disassembledName") == line:
+                    best_fit_journey = journey
+                    break
+
+            if best_fit_journey == None:
+                return []
+
+            for leg in best_fit_journey.get('legs', []):
+                for stop in leg.get('stopSequence', []):
+                    stops.append(stop.get("name").split(",")[0].replace("Station", ""))
 
         stops.pop(0)
         print(stops)
@@ -199,6 +237,7 @@ draw_splash()
 
 small_font = bitmap_font.load_font("lemon.bdf")
 eta_text = None
+time_text = None
 station_list = None
 station_list_height = 0
 bottom_clip = None
@@ -219,7 +258,7 @@ def draw_display(event):
             print("planned")
             hours, minutes = time_left(event["departureTimePlanned"])
 
-        stops = get_stops(STOP_ID, current_event["transportation"]["destination"]["id"])
+        stops = get_stops(STOP_ID, current_event["transportation"]["destination"]["id"], event["transportation"]["disassembledName"])
 
         global station_list
         station_list = displayio.Group()
@@ -253,7 +292,7 @@ def draw_display(event):
         bottom_clip.x = 0
         bottom_clip.y = 24
 
-        destination = event["transportation"]["destination"]["name"].split("via")[0]
+        destination = event["transportation"]["destination"]["name"].split("via")[0].replace("Station", "")
         destination_text = adafruit_display_text.label.Label(
             small_font,
             color=0xffffff,
@@ -266,8 +305,18 @@ def draw_display(event):
         icon.x = 1
         icon.y = 1
 
+        global time_text
+        time_text = adafruit_display_text.label.Label(
+            small_font,
+            color=0xffffff,
+            text = "12:00",
+        )
+        time_text.y = 27
+        time_text.text = get_time()
+
         if hours != 0:
             bottom_clip.hidden = False
+            time_text.text = "" 
             eta_string = f"{hours} hr {minutes} min"
         elif minutes != 0:
             bottom_clip.hidden = False
@@ -292,6 +341,7 @@ def draw_display(event):
         group.append(destination_text)
         group.append(icon)
         group.append(eta_text)
+        group.append(time_text)
         
         display.root_group = group
     else:
@@ -318,11 +368,16 @@ time_ticks = 0
 data_ticks = 0
 
 update_departures(STOP_ID, PLATFORM)
+
+draw_splash(VERSION)
+
 draw_display(current_event)
 
 while True:
     if current_event != {}:
         if time_ticks >= TIME_RE:
+            time_text.text = get_time()
+            
             if current_event.get("departureTimeEstimated"):
                 print("estimated")
                 hours, minutes = time_left(current_event["departureTimeEstimated"])
@@ -332,6 +387,7 @@ while True:
     
             if hours != 0:
                 bottom_clip.hidden = False
+                time_text.text = "" 
                 eta_text.text = f"{hours} hr {minutes} min"
             elif minutes != 0:
                 bottom_clip.hidden = False
@@ -339,6 +395,7 @@ while True:
             else:
                 bottom_clip.hidden = True
                 eta_text.text = ""
+                time_text.text = ""
                 
             time_ticks = 0
     
@@ -349,17 +406,14 @@ while True:
                 print("update")
                 draw_display(current_event)
             data_ticks = 0
-
+ 
         station_list.y = station_list.y - 1
 
-        if abs(station_list.y) > station_list_height:
+        if station_list.y * -1 > station_list_height:
             station_list.y = 64
         
         time_ticks += 1
         data_ticks += 1
 
-    #time.sleep(TIME_MS)
+    time.sleep(TIME_MS)
     display.refresh(minimum_frames_per_second=0)
-    
-    
-    
